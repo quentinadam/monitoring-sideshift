@@ -21,7 +21,12 @@ const requests = new Array<Request>();
 const connections = new Set<{ webSocket: WebSocket; compressor: Compressor; interval?: number }>();
 
 async function request({ index, timestamp }: { index: number; timestamp: Date }) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => {
+    controller.abort();
+  }, 60000);
   const processResponse = (result: { success: true; status: number } | { success: false }) => {
+    clearTimeout(timer);
     const responseTime = Date.now() - timestamp.valueOf();
     console.log([
       new Date().toISOString(),
@@ -45,7 +50,7 @@ async function request({ index, timestamp }: { index: number; timestamp: Date })
     }
   };
   try {
-    const response = await fetch('https://sideshift.ai/api/v1/liquidity/tasks');
+    const response = await fetch('https://sideshift.ai/api/v1/liquidity/tasks', { signal: controller.signal });
     processResponse({ success: true, status: response.status });
   } catch (_) {
     processResponse({ success: false });
