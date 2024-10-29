@@ -306,7 +306,11 @@ Deno.serve({ port: 80, hostname: '0.0.0.0' }, async (request) => {
     <script>${script}</script>
     </head>
       <body style="padding: 0 16px">
-        <div id="root" style="max-width: 400px; margin: 0px auto">Loading</div>
+        <div id="root" style="max-width: 400px; margin: 0px auto">
+          <div style="text-align: center">
+            <span class="ellipsis">•</span><span class="ellipsis">•</span><span class="ellipsis">•</span>
+          </div>
+        </div>
       </body>
     </html>`;
   return new Response(html, { headers: { 'Content-type': 'text/html; charset=utf-8' } });
