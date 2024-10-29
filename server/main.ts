@@ -216,7 +216,9 @@ async function compileScript() {
   return result.outputFiles[0].text;
 }
 
-Deno.serve({ port: 80, hostname: '0.0.0.0' }, async (request) => {
+const script = await compileScript();
+
+Deno.serve({ port: 80, hostname: '0.0.0.0' }, (request) => {
   const url = new URL(request.url);
   console.log(`${request.method} ${url.pathname}${url.search}`);
   if (request.method !== 'GET' || url.pathname !== '/') {
@@ -242,7 +244,6 @@ Deno.serve({ port: 80, hostname: '0.0.0.0' }, async (request) => {
     };
     return response;
   }
-  const script = await compileScript();
   const html = `<!DOCTYPE html>
     <html>
     <head>
