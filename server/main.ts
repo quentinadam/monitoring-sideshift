@@ -1,3 +1,7 @@
+import * as esbuild from 'https://deno.land/x/esbuild@v0.20.0/mod.js';
+import { denoPlugins } from 'https://deno.land/x/esbuild_deno_loader@0.9.0/mod.ts';
+import Compressor from './Compressor.ts';
+
 type Request =
   & { index: number; timestamp: Date; responseTime: number }
   & ({ success: true; status: number } | { success: false });
@@ -14,7 +18,7 @@ type Bucket = {
 };
 
 const requests = new Array<Request>();
-const connections = new Set<{ webSocket: WebSocket; limit?: number }>();
+const connections = new Set<{ webSocket: WebSocket; compressor: Compressor; interval?: number }>();
 
 async function request({ index, timestamp }: { index: number; timestamp: Date }) {
   const processResponse = (result: { success: true; status: number } | { success: false }) => {
@@ -30,10 +34,10 @@ async function request({ index, timestamp }: { index: number; timestamp: Date })
       requests.pop();
     }
     for (const connection of connections) {
-      const { webSocket, limit } = connection;
-      const content = generateContent(limit);
+      const { webSocket, compressor, interval } = connection;
+      const content = generateContent(interval);
       try {
-        webSocket.send(content);
+        compressor.write(new TextEncoder().encode(content));
       } catch (_) {
         connections.delete(connection);
         webSocket.close();
@@ -60,7 +64,7 @@ async function request({ index, timestamp }: { index: number; timestamp: Date })
   }
 })();
 
-function generateContent(limit?: number) {
+function generateContent(interval = 3600) {
   return ((requests) => {
     const createSubBuckets = () => {
       return [
@@ -168,31 +172,48 @@ function generateContent(limit?: number) {
         ${requests.map((request) => createRequestRow(request)).join('')}
       </table>
     `;
-  })(limit !== undefined ? requests.slice(0, limit) : requests);
+  })(requests.filter((request) => Date.now() - request.timestamp.valueOf() <= interval * 1000));
 }
 
-Deno.serve({ port: 80, hostname: '0.0.0.0' }, (request) => {
+async function compileScript() {
+  const result = await esbuild.build({
+    plugins: [...denoPlugins()],
+    entryPoints: ['./script.ts'],
+    write: false,
+    bundle: true,
+    format: 'esm',
+  });
+  esbuild.stop();
+  return result.outputFiles[0].text;
+}
+
+Deno.serve({ port: 80, hostname: '0.0.0.0' }, async (request) => {
   const url = new URL(request.url);
   console.log(`${request.method} ${url.pathname}${url.search}`);
   if (request.method !== 'GET' || url.pathname !== '/') {
     return new Response('Not Found', { status: 404 });
   }
-  const limit = ((limit) => {
-    return (limit !== null) ? ((limit) => isNaN(limit) ? undefined : limit)(parseInt(limit)) : undefined;
-  })(url.searchParams.get('limit'));
+  const interval = ((interval) => {
+    return (interval !== null) ? ((interval) => isNaN(interval) ? undefined : interval)(parseInt(interval)) : undefined;
+  })(url.searchParams.get('interval'));
   if (request.headers.get('upgrade') === 'websocket') {
     const { response, socket: webSocket } = Deno.upgradeWebSocket(request);
     webSocket.onopen = () => {
-      const connection = { webSocket, limit };
+      const compressor = new Compressor();
+      const connection = { webSocket, compressor, interval };
       connections.add(connection);
-      const content = generateContent(limit);
-      webSocket.send(content);
+      compressor.onData.addListener((buffer) => {
+        webSocket.send(buffer);
+      });
+      const content = generateContent(interval);
+      compressor.write(new TextEncoder().encode(content));
       webSocket.onclose = () => {
         connections.delete(connection);
       };
     };
     return response;
   }
+  const script = await compileScript();
   const html = `<!DOCTYPE html>
     <html>
     <head>
@@ -229,47 +250,10 @@ Deno.serve({ port: 80, hostname: '0.0.0.0' }, (request) => {
         margin: 12px 0 4px 0;
       }
     </style>
-    <script>
-
-      function replaceTimestamp(string) {
-        return string.replace(/\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z/g, (string) => {
-          const date = new Date(string);
-          return [
-            date.getDate().toString().padStart(2, '0'),
-            (date.getMonth() + 1).toString().padStart(2, '0'),
-            date.getFullYear().toString().padStart(2, '0')
-          ].join('/') + ' ' + [
-            date.getHours().toString().padStart(2, '0'),
-            date.getMinutes().toString().padStart(2, '0'),
-            date.getSeconds().toString().padStart(2, '0'),
-          ].join(':');
-        });
-      }
-
-      const url = location.href.replace("http", "ws");
-      (async () => {
-        while (true) {
-          const start = Date.now();
-          await new Promise((resolve) => {
-            const webSocket = new WebSocket(url);
-            webSocket.onopen = () => {
-              webSocket.onmessage = (e) => {
-                const root = document.getElementById("root");
-                root.innerHTML = replaceTimestamp(e.data);
-              };
-            };
-            webSocket.onclose = () => {
-              resolve();
-            }
-          });
-          await new Promise((resolve) => setTimeout(resolve, start + 1000 - Date.now()));
-        }
-      })();
-      
-    </script>
+    <script>${script}</script>
     </head>
-    <body>
-    <div id="root" style="max-width: 400px; margin: 0 auto">Loading</div>
+    <body style="padding: 0 16px">
+    <div id="root" style="max-width: 400px; margin: 0px auto">Loading</div>
     </body>
     </html>`;
   return new Response(html, { headers: { 'Content-type': 'text/html ' } });

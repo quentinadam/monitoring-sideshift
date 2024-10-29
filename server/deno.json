@@ -4,6 +4,18 @@
     "lineWidth": 120
   },
   "tasks": {
-    "run": "deno run --allow-net=sideshift.ai:443,0.0.0.0:80 main.ts"
+    "run": "deno run -A main.ts"
+  },
+  "compilerOptions": {
+    "lib": [
+      "dom",
+      "esnext",
+      "deno.window"
+    ]
+  },
+  "imports": {
+    "@quentinadam/assert": "jsr:@quentinadam/assert@^0.1.7",
+    "@quentinadam/require": "jsr:@quentinadam/require@^0.1.1",
+    "@quentinadam/uint8array-extension": "jsr:@quentinadam/uint8array-extension@^0.1.4"
   }
 }
