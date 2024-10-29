@@ -37,6 +37,6 @@ const url = location.href.replace('http', 'ws');
         resolve();
       };
     });
-    await new Promise((resolve) => setTimeout(resolve, start + 1000 - Date.now()));
+    await new Promise((resolve) => setTimeout(resolve, start + 5000 - Date.now()));
   }
 })();
