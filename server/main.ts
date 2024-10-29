@@ -25,8 +25,6 @@ const requests = new Array<Request>();
 const connections = new Set<{ webSocket: WebSocket; compressor: Compressor; interval?: number }>();
 
 function update() {
-  //requests.unshift({ index, timestamp, responseTime, ...result });
-  //requests.sort((a, b) => b.index - a.index);
   if (requests.length > 20000) {
     requests.pop();
   }
