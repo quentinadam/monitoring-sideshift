@@ -2,9 +2,13 @@ import * as esbuild from 'https://deno.land/x/esbuild@v0.20.0/mod.js';
 import { denoPlugins } from 'https://deno.land/x/esbuild_deno_loader@0.9.0/mod.ts';
 import Compressor from './Compressor.ts';
 
-type Request =
-  & { index: number; timestamp: Date; responseTime: number }
-  & ({ success: true; status: number } | { success: false });
+type Response = { timestamp: Date } & ({ success: true; status: number } | { success: false });
+
+type Request = {
+  index: number;
+  request: { timestamp: Date };
+  response?: Response;
+};
 
 type Bucket = {
   label: string;
@@ -12,7 +16,7 @@ type Bucket = {
   fn: (request: Request) => boolean;
   subBuckets: {
     count: number;
-    fn: (request: Request) => boolean;
+    fn: (response: Response) => boolean;
   }[];
   bold?: boolean;
 };
@@ -20,34 +24,39 @@ type Bucket = {
 const requests = new Array<Request>();
 const connections = new Set<{ webSocket: WebSocket; compressor: Compressor; interval?: number }>();
 
+function update() {
+  //requests.unshift({ index, timestamp, responseTime, ...result });
+  //requests.sort((a, b) => b.index - a.index);
+  if (requests.length > 20000) {
+    requests.pop();
+  }
+  for (const connection of connections) {
+    const { webSocket, compressor, interval } = connection;
+    const content = generateContent(interval);
+    try {
+      compressor.write(new TextEncoder().encode(content));
+    } catch (_) {
+      connections.delete(connection);
+      webSocket.close();
+    }
+  }
+}
+
 async function request({ index, timestamp }: { index: number; timestamp: Date }) {
+  const request: Request = { index, request: { timestamp } };
+  requests.unshift(request);
+  if (requests.length > 20000) {
+    requests.pop();
+  }
+  update();
   const controller = new AbortController();
   const timer = setTimeout(() => {
     controller.abort();
   }, 60000);
   const processResponse = (result: { success: true; status: number } | { success: false }) => {
     clearTimeout(timer);
-    const responseTime = Date.now() - timestamp.valueOf();
-    console.log([
-      new Date().toISOString(),
-      (index % 1e6).toString().padStart(6, '0'),
-      `${result.success ? result.status : 'error'} returned after ${responseTime}ms`,
-    ].join(' '));
-    requests.unshift({ index, timestamp, responseTime, ...result });
-    requests.sort((a, b) => b.index - a.index);
-    if (requests.length > 20000) {
-      requests.pop();
-    }
-    for (const connection of connections) {
-      const { webSocket, compressor, interval } = connection;
-      const content = generateContent(interval);
-      try {
-        compressor.write(new TextEncoder().encode(content));
-      } catch (_) {
-        connections.delete(connection);
-        webSocket.close();
-      }
-    }
+    request.response = { timestamp: new Date(), ...result };
+    update();
   };
   try {
     const response = await fetch('https://sideshift.ai/api/v1/liquidity/tasks', { signal: controller.signal });
@@ -73,44 +82,49 @@ function generateContent(interval = 3600) {
   return ((requests) => {
     const createSubBuckets = () => {
       return [
-        { count: 0, fn: (request: Request) => request.success && request.status === 200 },
-        { count: 0, fn: (request: Request) => request.success && request.status === 429 },
-        { count: 0, fn: (request: Request) => request.success && request.status === 502 },
-        { count: 0, fn: (request: Request) => request.success && request.status === 504 },
-        { count: 0, fn: (request: Request) => !request.success },
+        { count: 0, fn: (response: Response) => response.success && response.status === 200 },
+        { count: 0, fn: (response: Response) => response.success && response.status === 429 },
+        { count: 0, fn: (response: Response) => response.success && response.status === 502 },
+        { count: 0, fn: (response: Response) => response.success && response.status === 504 },
+        { count: 0, fn: (response: Response) => !response.success },
       ];
+    };
+    const createBucket = (
+      { minResponseTime, maxResponseTime }: { minResponseTime: number; maxResponseTime?: number },
+    ) => {
+      return {
+        label: maxResponseTime !== undefined ? `${minResponseTime}-${maxResponseTime}` : `${minResponseTime}+`,
+        count: 0,
+        fn: ({ request, response }: Request) => {
+          if (response === undefined) {
+            return false;
+          }
+          const responseTime = response.timestamp.valueOf() - request.timestamp.valueOf();
+          if (maxResponseTime !== undefined) {
+            return responseTime >= minResponseTime && responseTime < maxResponseTime;
+          } else {
+            return responseTime >= minResponseTime;
+          }
+        },
+        subBuckets: createSubBuckets(),
+      };
     };
     const buckets: Bucket[] = [
       ...Array.from({ length: 5 }).map((_, index) => {
         const minResponseTime = index * 1000;
         const maxResponseTime = (index + 1) * 1000;
-        return {
-          label: `${minResponseTime}-${maxResponseTime}`,
-          count: 0,
-          fn: (request: Request) => request.responseTime >= minResponseTime && request.responseTime < maxResponseTime,
-          subBuckets: createSubBuckets(),
-        };
+        return createBucket({ minResponseTime, maxResponseTime });
       }),
       ...Array.from({ length: 5 }).map((_, index) => {
         const minResponseTime = (index + 1) * 5000;
         const maxResponseTime = (index + 2) * 5000;
-        return {
-          label: `${minResponseTime}-${maxResponseTime}`,
-          count: 0,
-          fn: (request: Request) => request.responseTime >= minResponseTime && request.responseTime < maxResponseTime,
-          subBuckets: createSubBuckets(),
-        };
+        return createBucket({ minResponseTime, maxResponseTime });
       }),
-      {
-        label: '30000+',
-        count: 0,
-        fn: (request: Request) => request.responseTime >= 30000,
-        subBuckets: createSubBuckets(),
-      },
+      createBucket({ minResponseTime: 30000 }),
       {
         label: 'sum',
         count: 0,
-        fn: () => true,
+        fn: (request) => request.response !== undefined,
         subBuckets: createSubBuckets(),
         bold: true,
       },
@@ -120,7 +134,7 @@ function generateContent(interval = 3600) {
         if (bucket.fn(request)) {
           bucket.count++;
           for (const subBucket of bucket.subBuckets) {
-            if (subBucket.fn(request)) {
+            if (request.response !== undefined && subBucket.fn(request.response)) {
               subBucket.count++;
             }
           }
@@ -144,13 +158,23 @@ function generateContent(interval = 3600) {
         ${createCell({ count: bucket.count, bold: true })}
       </tr>`;
     };
-    const createRequestRow = (request: Request) => {
-      return `<tr>
-        <td class="left">${request.timestamp.toISOString().slice(0, 19)}Z</td>
-        <td class="right">${request.index}</td>
-        <td class="right">${request.responseTime}ms</td>
-        <td class="right">${request.success ? request.status : 'error'}</td>
-      </tr>`;
+    const createRequestRow = ({ request, response, index }: Request) => {
+      if (response !== undefined) {
+        const responseTime = response.timestamp.valueOf() - request.timestamp.valueOf();
+        return `<tr>
+          <td class="left">${request.timestamp.toISOString().slice(0, 19)}Z</td>
+          <td class="right">${index}</td>
+          <td class="right">${responseTime}ms</td>
+          <td class="right">${response.success ? response.status : 'error'}</td>
+        </tr>`;
+      } else {
+        return `<tr>
+          <td class="left">${request.timestamp.toISOString().slice(0, 19)}Z</td>
+          <td class="right">${index}</td>
+          <td class="right"><span class="ellipsis">•</span><span class="ellipsis">•</span><span class="ellipsis">•</span></td>
+          <td class="right"><span class="ellipsis">•</span><span class="ellipsis">•</span><span class="ellipsis">•</span></td>
+        </tr>`;
+      }
     };
     return `
       <h1>Summary</h1>
@@ -177,7 +201,7 @@ function generateContent(interval = 3600) {
         ${requests.map((request) => createRequestRow(request)).join('')}
       </table>
     `;
-  })(requests.filter((request) => Date.now() - request.timestamp.valueOf() <= interval * 1000));
+  })(requests.filter(({ request }) => Date.now() - request.timestamp.valueOf() <= interval * 1000));
 }
 
 async function compileScript() {
@@ -255,12 +279,35 @@ Deno.serve({ port: 80, hostname: '0.0.0.0' }, async (request) => {
         font-size: 14px;
         margin: 12px 0 4px 0;
       }
+
+      .ellipsis {
+        color: #ccc;
+        animation: animate 1.5s infinite;
+      }
+      .ellipsis:nth-child(1) {
+        animation-delay: 0s;
+      }
+      .ellipsis:nth-child(2) {
+        animation-delay: 0.5s;
+      }
+      .ellipsis:nth-child(3) {
+        animation-delay: 1s;
+      }
+
+      @keyframes animate {
+        0%, 66%, 100% {
+          color: #ccc;
+        }
+        33% {
+          color: black;
+        }
+      }
     </style>
     <script>${script}</script>
     </head>
-    <body style="padding: 0 16px">
-    <div id="root" style="max-width: 400px; margin: 0px auto">Loading</div>
-    </body>
+      <body style="padding: 0 16px">
+        <div id="root" style="max-width: 400px; margin: 0px auto">Loading</div>
+      </body>
     </html>`;
-  return new Response(html, { headers: { 'Content-type': 'text/html ' } });
+  return new Response(html, { headers: { 'Content-type': 'text/html; charset=utf-8' } });
 });
