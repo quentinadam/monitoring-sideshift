@@ -4,6 +4,6 @@
     "lineWidth": 120
   },
   "tasks": {
-    "run": "sudo deno run --allow-net=sideshift.ai:443,0.0.0.0:80 main.ts"
+    "run": "deno run --allow-net=sideshift.ai:443,0.0.0.0:80 main.ts"
   }
 }
