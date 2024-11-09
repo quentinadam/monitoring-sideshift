@@ -2,10 +2,9 @@ import * as esbuild from 'https://deno.land/x/esbuild@v0.20.0/mod.js';
 import { denoPlugins } from 'https://deno.land/x/esbuild_deno_loader@0.9.0/mod.ts';
 import Compressor from './Compressor.ts';
 
-type Response = { timestamp: Date } & ({ success: true; status: number } | { success: false });
+type Response = { timestamp: Date } & ({ success: true; status: number; ray?: string } | { success: false });
 
 type Request = {
-  index: number;
   request: { timestamp: Date };
   response?: Response;
 };
@@ -40,8 +39,8 @@ function update() {
   }
 }
 
-async function request({ index, timestamp }: { index: number; timestamp: Date }) {
-  const request: Request = { index, request: { timestamp } };
+async function request({ timestamp }: { timestamp: Date }) {
+  const request: Request = { request: { timestamp } };
   requests.unshift(request);
   if (requests.length > 20000) {
     requests.pop();
@@ -51,14 +50,15 @@ async function request({ index, timestamp }: { index: number; timestamp: Date })
   const timer = setTimeout(() => {
     controller.abort();
   }, 60000);
-  const processResponse = (result: { success: true; status: number } | { success: false }) => {
+  const processResponse = (result: { success: true; status: number; ray?: string } | { success: false }) => {
     clearTimeout(timer);
     request.response = { timestamp: new Date(), ...result };
     update();
   };
   try {
     const response = await fetch('https://sideshift.ai/api/v1/liquidity/tasks', { signal: controller.signal });
-    processResponse({ success: true, status: response.status });
+    const ray = response.headers.get('cf-ray');
+    processResponse({ success: true, status: response.status, ray: ray !== null ? ray : undefined });
   } catch (_) {
     processResponse({ success: false });
   }
@@ -66,12 +66,10 @@ async function request({ index, timestamp }: { index: number; timestamp: Date })
 
 (async () => {
   const interval = 5000;
-  let index = 0;
   let timestamp = new Date(Math.ceil(Date.now() / interval) * interval);
   while (true) {
     await new Promise((resolve) => setTimeout(resolve, timestamp.valueOf() - Date.now()));
-    request({ index, timestamp });
-    index++;
+    request({ timestamp });
     timestamp = new Date(timestamp.valueOf() + interval);
   }
 })();
@@ -156,19 +154,21 @@ function generateContent(interval = 3600) {
         ${createCell({ count: bucket.count, bold: true })}
       </tr>`;
     };
-    const createRequestRow = ({ request, response, index }: Request) => {
+    const createRequestRow = ({ request, response }: Request) => {
       if (response !== undefined) {
         const responseTime = response.timestamp.valueOf() - request.timestamp.valueOf();
         return `<tr>
           <td class="left">${request.timestamp.toISOString().slice(0, 19)}Z</td>
-          <td class="right">${index}</td>
           <td class="right">${responseTime}ms</td>
           <td class="right">${response.success ? response.status : 'error'}</td>
+          <td class="right" style="font-family: Roboto Mono; font-size: 11px">${
+          response.success ? response.ray : ''
+        }</td>
         </tr>`;
       } else {
         return `<tr>
           <td class="left">${request.timestamp.toISOString().slice(0, 19)}Z</td>
-          <td class="right">${index}</td>
+          <td class="right"><span class="ellipsis">•</span><span class="ellipsis">•</span><span class="ellipsis">•</span></td>
           <td class="right"><span class="ellipsis">•</span><span class="ellipsis">•</span><span class="ellipsis">•</span></td>
           <td class="right"><span class="ellipsis">•</span><span class="ellipsis">•</span><span class="ellipsis">•</span></td>
         </tr>`;
@@ -192,9 +192,9 @@ function generateContent(interval = 3600) {
       <table>
         <tr>
           <th class="left">timestamp</th>
-          <th class="right">index</th>
           <th class="right">response time</th>
           <th class="right">status</th>
+          <th class="right">cf-ray</th>
         </tr>
         ${requests.map((request) => createRequestRow(request)).join('')}
       </table>
@@ -249,8 +249,7 @@ Deno.serve({ port: 80, hostname: '0.0.0.0' }, (request) => {
     <meta name='viewport' content='width=device-width, initial-scale=1.0' />
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Nunito+Sans:ital,opsz,wght@0,6..12,200..1000;1,6..12,200..1000&display=swap" rel="stylesheet">
-    <style>
+    <link href="https://fonts.googleapis.com/css2?family=Nunito+Sans:ital,opsz,wght@0,6..12,200..1000;1,6..12,200..1000&family=Roboto+Mono:ital,wght@0,100..700;1,100..700&display=swap" rel="stylesheet">    <style>
       * {
         font-family: "Nunito Sans", serif;
         font-size: 12px;
