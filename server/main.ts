@@ -161,7 +161,7 @@ function generateContent(interval = 3600) {
           <td class="left">${request.timestamp.toISOString().slice(0, 19)}Z</td>
           <td class="right">${responseTime}ms</td>
           <td class="right">${response.success ? response.status : 'error'}</td>
-          <td class="right" style="font-family: Roboto Mono; font-size: 11px">${
+          <td class="right" style="font-family: Roboto Mono; font-size: 10px">${
           response.success ? response.ray : ''
         }</td>
         </tr>`;
@@ -192,7 +192,7 @@ function generateContent(interval = 3600) {
       <table>
         <tr>
           <th class="left">timestamp</th>
-          <th class="right">response time</th>
+          <th class="right">resp time</th>
           <th class="right">status</th>
           <th class="right">cf-ray</th>
         </tr>
@@ -258,6 +258,7 @@ Deno.serve({ port: 80, hostname: '0.0.0.0' }, (request) => {
       }
       td, th {
         padding: 2px 4px;
+        white-space: nowrap;
       }
       td.bold, th.bold {
         font-weight: bold;
