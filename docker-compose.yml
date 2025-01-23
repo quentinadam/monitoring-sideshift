@@ -1,19 +1,19 @@
-name: "monitoring"
+name: 'monitoring'
 services:
   server:
     container_name: server
     build:
       context: ./server
-    image: "server:latest"
+    image: 'server:latest'
     ports:
-      - "0.0.0.0:80:80"
+      - '0.0.0.0:80:80'
     networks:
       network:
     logging:
-      driver: "json-file"
+      driver: 'json-file'
       options:
-          max-size: "100m"
-          max-file: 10
+        max-size: '100m'
+        max-file: 10
     restart: on-failure:10
 networks:
   network:

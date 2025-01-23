@@ -232,7 +232,12 @@ Deno.serve({ port: 80, hostname: '0.0.0.0' }, (request) => {
       const connection = { webSocket, compressor, interval };
       connections.add(connection);
       compressor.onData.addListener((buffer) => {
-        webSocket.send(buffer);
+        try {
+          webSocket.send(buffer);
+        } catch (error) {
+          console.error(error);
+          webSocket.close();
+        }
       });
       const content = generateContent(interval);
       compressor.write(new TextEncoder().encode(content));
